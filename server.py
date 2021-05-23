@@ -84,18 +84,24 @@ def get_filter_arguments(request_arguments):
         )
     for field in ['channel', 'country', 'os']:
         if field in request_arguments:
-            if ',' not in request_arguments[field]:
-                result.append(
-                    getattr(MetricsRecord, field) == request_arguments[field]
+            result.append(
+                getattr(MetricsRecord, field).in_(
+                    request_arguments[field].split(',')
                 )
-            else:
-                result.append(
-                    getattr(MetricsRecord, field).in_(
-                        request_arguments[field].split(',')
-                    )
-                )
+            )
     return and_(*result)
 
+
+def get_metric_display(metric, fields):
+    if fields is None:
+        fields = 'impressions,clicks,installs,spend,revenue,cpi'
+    result = {}
+    for field in fields.split(','):
+        if field == 'cpi':
+            result['cpi'] = metric.spend / metric.installs
+        else:
+            result[field] = getattr(metric, field)
+    return result
 
 # Actual view
 
@@ -104,17 +110,7 @@ def show_metrics():
     metrics = MetricsRecord.query.filter(get_filter_arguments(request.args))
     return {
         'metrics': [
-            {
-                'date': metric.date.strftime('%Y-%m-%d'),
-                'channel': metric.channel,
-                'country': metric.country,
-                'os': metric.os,
-                'impressions': metric.impressions,
-                'clicks': metric.clicks,
-                'installs': metric.installs,
-                'spend': metric.spend,
-                'revenue': metric.revenue,
-            }
+            get_metric_display(metric, request.args.get('fields'))
             for metric in metrics
         ]
     }
