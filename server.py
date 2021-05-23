@@ -118,6 +118,29 @@ def get_metric_display(metric, fields):
     return result
 
 
+def get_order_by_clause(order_by_fields, grouped=False):
+    for field in order_by_fields.split(','):
+        if field in ['date', 'channel', 'country', 'os']:
+            yield (
+                getattr(MetricsRecord, field)
+                if field[0] != '-'
+                else getattr(MetricsRecord, field[1:]).desc()
+            )
+        elif field in ['impressions', 'clicks',
+                       'installs', 'spend', 'revenue', 'cpi']:
+            if grouped:
+                yield (
+                    func.sum(getattr(MetricsRecord, field))
+                    if field[0] != '-'
+                    else func.sum(getattr(MetricsRecord, field[1:])).desc()
+                )
+            yield (
+                getattr(MetricsRecord, field)
+                if field[0] != '-'
+                else getattr(MetricsRecord, field[1:]).desc()
+            )
+
+
 # Actual view
 
 @app.route("/")
@@ -168,6 +191,14 @@ def show_metrics():
             ).label('cpi')
         ).filter(
             get_filter_arguments(request.args)
+        )
+
+    if 'order_by' in request.args:
+        metrics = metrics.order_by(
+            *get_order_by_clause(
+                order_by_fields=request.args['order_by'],
+                grouped=('group_by' in request.args),
+            ),
         )
 
     # Display the results
