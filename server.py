@@ -8,7 +8,7 @@ from flask import (
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import (
-    or_,
+    func,
     and_,
 )
 
@@ -67,6 +67,7 @@ print('Records in database:', MetricsRecord.query.count())
 # Helper functions
 
 def get_filter_arguments(request_arguments):
+    """Get list of fields to filter rows by from comma-separated `str`."""
     result = []
     if 'date_from' in request_arguments:
         result.append(
@@ -92,25 +93,95 @@ def get_filter_arguments(request_arguments):
     return and_(*result)
 
 
+def get_group_by_clause(fields):
+    """Get list of fields to group rows by from comma-separated `str`."""
+    return [
+        field
+        for field in fields.split(',')
+        if field in ['date', 'channel', 'country', 'os']
+    ]
+
+
 def get_metric_display(metric, fields):
-    if fields is None:
-        fields = 'impressions,clicks,installs,spend,revenue,cpi'
+    """Display specified fields from a row (individual or grouped) as a `dict`."""
     result = {}
     for field in fields.split(','):
-        if field == 'cpi':
-            result['cpi'] = metric.spend / metric.installs
-        else:
-            result[field] = getattr(metric, field)
+        if field in [
+                'date', 'channel', 'country',
+                'os', 'impressions', 'clicks',
+                'installs', 'spend', 'revenue', 'cpi']:
+            result[field] = (
+                getattr(metric, field)
+                if field != 'date'
+                else getattr(metric, field).strftime('%Y-%m-%d')
+            )
     return result
+
 
 # Actual view
 
 @app.route("/")
 def show_metrics():
-    metrics = MetricsRecord.query.filter(get_filter_arguments(request.args))
+    metrics = MetricsRecord.query
+
+    if 'group_by' in request.args:
+        # Get grouped rows filtered via a HAVING clause
+        metrics = metrics.with_entities(
+            MetricsRecord.date,
+            MetricsRecord.channel,
+            MetricsRecord.country,
+            MetricsRecord.os,
+            func.sum(MetricsRecord.impressions).label('impressions'),
+            func.sum(MetricsRecord.clicks).label('clicks'),
+            func.sum(MetricsRecord.installs).label('installs'),
+            func.sum(MetricsRecord.spend).label('spend'),
+            func.sum(MetricsRecord.revenue).label('revenue'),
+            (
+                func.sum(MetricsRecord.spend)
+                / func.sum(MetricsRecord.installs)
+            ).label('cpi'),
+            *[
+                getattr(MetricsRecord, field)
+                for field in get_group_by_clause(request.args['group_by'])
+            ]
+        ).group_by(
+            *get_group_by_clause(request.args['group_by'])
+        ).having(
+            get_filter_arguments(request.args)
+        )
+
+    else:
+        # Get individual rows with CPI counted at DB level
+        metrics = metrics.with_entities(
+            MetricsRecord.date,
+            MetricsRecord.channel,
+            MetricsRecord.country,
+            MetricsRecord.os,
+            MetricsRecord.impressions,
+            MetricsRecord.clicks,
+            MetricsRecord.installs,
+            MetricsRecord.spend,
+            MetricsRecord.revenue,
+            (
+                MetricsRecord.spend
+                / MetricsRecord.installs
+            ).label('cpi')
+        ).filter(
+            get_filter_arguments(request.args)
+        )
+
+    # Display the results
     return {
         'metrics': [
-            get_metric_display(metric, request.args.get('fields'))
+            get_metric_display(
+                metric,
+                request.args.get(
+                    'fields',
+                    # Display all numeric fields by default
+                    'impressions,clicks,installs,spend,revenue,cpi'
+                ) + ','
+                + request.args.get('group_by', '')
+            )
             for metric in metrics
         ]
     }
