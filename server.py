@@ -1,10 +1,16 @@
-import os
 import csv
 import datetime
 from pathlib import Path
 
-from flask import Flask
+from flask import (
+    Flask,
+    request,
+)
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import (
+    or_,
+    and_,
+)
 
 
 app = Flask(__name__)
@@ -16,6 +22,7 @@ db_file = Path('adjust-task-db.db')
 db_file.touch(exist_ok=True)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + str(db_file.absolute())
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 
@@ -57,11 +64,44 @@ reload_database()
 print('Records in database:', MetricsRecord.query.count())
 
 
+# Helper functions
+
+def get_filter_arguments(request_arguments):
+    result = []
+    if 'date_from' in request_arguments:
+        result.append(
+            MetricsRecord.date >= datetime.datetime.strptime(
+                request_arguments['date_from'],
+                '%Y-%m-%d'
+            ),
+        )
+    if 'date_to' in request_arguments:
+        result.append(
+            MetricsRecord.date <= datetime.datetime.strptime(
+                request_arguments['date_to'],
+                '%Y-%m-%d'
+            ),
+        )
+    for field in ['channel', 'country', 'os']:
+        if field in request_arguments:
+            if ',' not in request_arguments[field]:
+                result.append(
+                    getattr(MetricsRecord, field) == request_arguments[field]
+                )
+            else:
+                result.append(
+                    getattr(MetricsRecord, field).in_(
+                        request_arguments[field].split(',')
+                    )
+                )
+    return and_(*result)
+
+
 # Actual view
 
 @app.route("/")
 def show_metrics():
-    metrics = MetricsRecord.query.all()
+    metrics = MetricsRecord.query.filter(get_filter_arguments(request.args))
     return {
         'metrics': [
             {
